@@ -1,0 +1,8 @@
+Flask==3.0.3
+blinker
+click
+itsdangerous
+Jinja2
+Werkzeug
+SQLAlchemy
+psycopg2-binary

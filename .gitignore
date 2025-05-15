@@ -1,0 +1,22 @@
+# Virtual Environment
+venv/
+
+# IDEs
+.vscode/
+
+# Compiled files
+*.pyc
+__pycache__/
+
+# Environment variables
+.env
+
+# Backup files
+*.bak
+
+# Logs and databases
+*.log
+*.db
+
+# Other
+.DS_Store
