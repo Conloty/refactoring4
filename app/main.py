@@ -7,7 +7,8 @@ from flask_sqlalchemy import SQLAlchemy
 app = Flask(__name__)
 CORS(app)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'postgresql://postgres:12345@localhost/Practice_db')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL',
+                                                        'postgresql://postgres:12345@localhost/Practice_db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
@@ -23,60 +24,34 @@ class Vacancy(db.Model):
 with app.app_context():
     db.create_all()
 
-@app.route('/parse', methods=['POST'])
-def parse():
-    data = request.get_json()
-    job_title, company, city, work_format = data['jobTitle'], data['company'], data['city'], data['workFormat']
-    
-    params = {
+def build_search_params(job_title, company, city, work_format):
+    return {
         'text': f'{job_title} {company} {city} {work_format}',
         'area': '1',
         'per_page': 100
     }
 
-    response = requests.get('https://api.hh.ru/vacancies', params=params)
-    if response.status_code == 200:
-        data = response.json()
-        results = []
+def extract_vacancy_data(item):
+    return {
+        "Вакансия": item['name'],
+        "Компания": item['employer']['name'],
+        "Город": item['area']['name'],
+        "Формат_работы": item.get('schedule', {}).get('name', ''),
+        "Ссылка": item['alternate_url']
+    }
 
-        for item in data['items']:
-            name = item['name']
-            company = item['employer']['name']
-            city = item['area']['name']
-            work_format = item.get('schedule', {}).get('name', '')
-            url = item['alternate_url']
-            
-            result = {
-                "Вакансия": name,
-                "Компания": company,
-                "Город": city,
-                "Формат работы": work_format,
-                "Ссылка": url
-            }
-            results.append(result)
-            
-            if not Vacancy.query.filter_by(url=url).first():
-                vacancy = Vacancy(
-                    name=name,
-                    company=company,
-                    city=city,
-                    work_format=work_format,
-                    url=url
-                )
-                db.session.add(vacancy)
-        
-        db.session.commit()
-        return jsonify(results)
-    
-    else:
-        return jsonify({'error': f"Ошибка: {response.status_code}"}), response.status_code
+def save_vacancy_if_not_exists(vacancy_data):
+    if not Vacancy.query.filter_by(url=vacancy_data["Ссылка"]).first():
+        new_vacancy = Vacancy(
+            name=vacancy_data["Вакансия"],
+            company=vacancy_data["Компания"],
+            city=vacancy_data["Город"],
+            work_format=vacancy_data["Формат работы"],
+            url=vacancy_data["Ссылка"]
+        )
+        db.session.add(new_vacancy)
 
-@app.route('/vacancies', methods=['GET'])
-def get_vacancies():
-    filters = request.args
-
-    query = Vacancy.query
-
+def filter_vacancies(query, filters):
     if filters.get('jobTitle'):
         query = query.filter(Vacancy.name.ilike(f"%{filters.get('jobTitle')}%"))
     if filters.get('company'):
@@ -85,16 +60,48 @@ def get_vacancies():
         query = query.filter(Vacancy.city.ilike(f"%{filters.get('city')}%"))
     if filters.get('workFormat'):
         query = query.filter(Vacancy.work_format.ilike(f"%{filters.get('workFormat')}%"))
+    return query
 
-    results = [
-        {
-            "Вакансия": vacancy.name,
-            "Компания": vacancy.company,
-            "Город": vacancy.city,
-            "Формат работы": vacancy.work_format,
-            "Ссылка": vacancy.url
-        } for vacancy in query.all()
-    ]
+def format_vacancy_output(vacancy):
+    return {
+        "Вакансия": vacancy.name,
+        "Компания": vacancy.company,
+        "Город": vacancy.city,
+        "Формат работы": vacancy.work_format,
+        "Ссылка": vacancy.url
+    }
+
+
+@app.route('/parse', methods=['POST'])
+def parse():
+    data = request.get_json()
+    params = build_search_params(
+        job_title=data['jobTitle'],
+        company=data['company'],
+        city=data['city'],
+        work_format=data['workFormat']
+    )
+
+    response = requests.get('https://api.hh.ru/vacancies', params=params)
+    if response.status_code != 200:
+        return jsonify({'error': f"Ошибка: {response.status_code}"}), response.status_code
+
+    data = response.json()
+    results = []
+
+    for item in data['items']:
+        vacancy_data = extract_vacancy_data(item)
+        results.append(vacancy_data)
+        save_vacancy_if_not_exists(vacancy_data)
+
+    db.session.commit()
+    return jsonify(results)
+
+@app.route('/vacancies', methods=['GET'])
+def get_vacancies():
+    filters = request.args
+    query = filter_vacancies(Vacancy.query, filters)
+    results = [format_vacancy_output(v) for v in query.all()]
     return jsonify(results)
 
 
